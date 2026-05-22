@@ -106,7 +106,7 @@ return new class extends Migration
             $table->timestamps();
 
             $table->index('shape_id');
-            $table->index(['shape_id', 'shape_pt_sequence']);
+            $table->unique(['shape_id', 'shape_pt_sequence']); // unique nötig für upsert()
         });
 
         // -------------------------------------------------------
