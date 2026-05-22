@@ -151,7 +151,7 @@ return new class extends Migration
             $table->index('trip_id');
             $table->index('stop_id');
             $table->index(['stop_id', 'departure_time']); // Kernindex für Abfahrtsabfragen
-            $table->index(['trip_id', 'stop_sequence']);
+            $table->unique(['trip_id', 'stop_sequence']);
 
             $table->foreign('trip_id')->references('trip_id')->on('trips')->cascadeOnDelete();
             $table->foreign('stop_id')->references('stop_id')->on('stops')->cascadeOnDelete();
