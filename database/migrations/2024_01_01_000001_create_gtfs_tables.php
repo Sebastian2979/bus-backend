@@ -51,7 +51,7 @@ return new class extends Migration
             $table->string('route_short_name')->nullable();
             $table->string('route_long_name')->nullable();
             $table->text('route_desc')->nullable();
-            $table->unsignedTinyInteger('route_type'); // 0=Tram, 1=Metro, 2=Rail, 3=Bus …
+            $table->unsignedInteger('route_type');
             $table->string('route_url')->nullable();
             $table->string('route_color', 6)->nullable();
             $table->string('route_text_color', 6)->nullable();
@@ -140,7 +140,7 @@ return new class extends Migration
             $table->string('arrival_time', 8)->nullable();   // HH:MM:SS (kann >24h sein!)
             $table->string('departure_time', 8)->nullable();
             $table->string('stop_id');
-            $table->unsignedSmallInteger('stop_sequence');
+            $table->unsignedInteger('stop_sequence');
             $table->string('stop_headsign')->nullable();
             $table->unsignedTinyInteger('pickup_type')->default(0);
             $table->unsignedTinyInteger('drop_off_type')->default(0);
