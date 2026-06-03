@@ -7,13 +7,14 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 // =============================================================
-// Route
+// GtfsRoute
 // =============================================================
-class Route extends Model
+class GtfsRoute extends Model
 {
     protected $primaryKey = 'route_id';
     public $incrementing = false;
     protected $keyType = 'string';
+    protected $table = 'routes';
 
     protected $fillable = [
         'route_id',
