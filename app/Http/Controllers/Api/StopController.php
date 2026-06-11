@@ -46,4 +46,30 @@ class StopController extends Controller
             ];
         });
     }
+
+    public function shapeStops(string $shapeId)
+    {
+        $trip = DB::table('trips')
+            ->where('shape_id', $shapeId)
+            ->first();
+
+        if (!$trip) {
+            return response()->json([]);
+        }
+
+        $stops = DB::table('stop_times')
+            ->join('stops', 'stops.stop_id', '=', 'stop_times.stop_id')
+            ->where('stop_times.trip_id', $trip->trip_id)
+            ->orderBy('stop_times.stop_sequence')
+            ->select(
+                'stops.stop_id as id',
+                'stops.stop_name as name',
+                'stops.stop_lat as latitude',
+                'stops.stop_lon as longitude',
+                'stop_times.stop_sequence'
+            )
+            ->get();
+
+        return response()->json($stops);
+    }
 }

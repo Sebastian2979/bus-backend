@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\ShapeController;
 use App\Http\Controllers\Api\TripController;
 
 Route::get('/stops', [StopController::class, 'index']);
+Route::get('/shapes/{shapeId}/stops', [StopController::class, 'shapeStops']);
 Route::get('/routes', [RouteController::class, 'index']);
 Route::get('/shapes/{line}', [ShapeController::class, 'show']);
 
