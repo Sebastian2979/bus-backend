@@ -1,14 +1,14 @@
 <?php
- 
+
 namespace App\Console\Commands;
- 
+
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\LazyCollection;
 use ZipArchive;
- 
+
 class GtfsImport extends Command
 {
     protected $signature = 'gtfs:import
@@ -17,9 +17,9 @@ class GtfsImport extends Command
                             {--chunk=500 : Datensätze pro DB-Insert-Batch}
                             {--skip-shapes : shapes.txt überspringen (spart Zeit/Speicher)}
                             {--fresh : Alle GTFS-Tabellen vor dem Import leeren}';
- 
+
     protected $description = 'Importiert GTFS-Staticdaten (ZIP) in die Datenbank';
- 
+
     /** Reihenfolge ist wichtig wegen Foreign Keys */
     private const IMPORT_ORDER = [
         'agency'         => 'agencies',
@@ -31,7 +31,7 @@ class GtfsImport extends Command
         'trips'          => 'trips',
         'stop_times'     => 'stop_times',
     ];
- 
+
     /** Spalten die beim upsert als Unique-Key dienen */
     private const UNIQUE_KEYS = [
         'agencies'       => ['agency_id'],
@@ -43,67 +43,65 @@ class GtfsImport extends Command
         'trips'          => ['trip_id'],
         'stop_times'     => ['trip_id', 'stop_sequence'],
     ];
- 
+
     private string $extractDir;
- 
+
     public function handle(): int
     {
         $this->extractDir = storage_path('app/gtfs_import_' . now()->format('YmdHis'));
- 
+
         try {
             $zipPath = $this->resolveZipPath();
- 
+
             if (!$zipPath) {
                 $this->error('Keine Quelle angegeben. Nutze --url, --file oder setze GTFS_STATIC_URL in der .env');
                 return self::FAILURE;
             }
- 
+
             $this->info('📦 Entpacke ZIP...');
             $this->extractZip($zipPath);
- 
+
             if ($this->option('fresh')) {
                 $this->truncateTables();
             }
- 
+
             $chunkSize = (int) $this->option('chunk');
             $startTime = now();
- 
+
             foreach (self::IMPORT_ORDER as $filename => $table) {
                 if ($filename === 'shapes' && $this->option('skip-shapes')) {
                     $this->line("  ⏭  shapes.txt übersprungen (--skip-shapes)");
                     continue;
                 }
- 
+
                 $filePath = $this->extractDir . '/' . $filename . '.txt';
- 
+
                 if (!file_exists($filePath)) {
                     $this->warn("  ⚠️  {$filename}.txt nicht gefunden, übersprungen.");
                     continue;
                 }
- 
+
                 $this->importFile($filePath, $table, $filename, $chunkSize);
             }
- 
+
             $elapsed = $startTime->diffForHumans(now(), true);
             $this->newLine();
             $this->info("✅ Import abgeschlossen in {$elapsed}.");
- 
+
             return self::SUCCESS;
- 
         } catch (\Throwable $e) {
             $this->error('Import fehlgeschlagen: ' . $e->getMessage());
             $this->line($e->getTraceAsString());
             return self::FAILURE;
- 
         } finally {
             $this->cleanup();
         }
     }
- 
+
     // -------------------------------------------------------
     // ZIP beschaffen
     // -------------------------------------------------------
- 
+
     private function resolveZipPath(): ?string
     {
         // 1. Lokale Datei via --file
@@ -113,164 +111,174 @@ class GtfsImport extends Command
             }
             return $localFile;
         }
- 
+
         // 2. URL via --url oder .env
         $url = $this->option('url') ?: config('gtfs.static_url');
- 
+
         if (!$url) {
             return null;
         }
- 
+
         return $this->downloadZip($url);
     }
- 
+
     private function downloadZip(string $url): string
     {
         $this->info("⬇️  Lade GTFS von {$url}");
- 
+
         $tempPath = storage_path('app/gtfs_download.zip');
- 
+
         // Streaming-Download für große Dateien
         $response = Http::withOptions(['sink' => $tempPath, 'timeout' => 120])->get($url);
- 
+
         if (!$response->successful()) {
             throw new \RuntimeException("Download fehlgeschlagen: HTTP {$response->status()}");
         }
- 
+
         $sizeMb = round(filesize($tempPath) / 1024 / 1024, 1);
         $this->line("   → {$sizeMb} MB heruntergeladen");
- 
+
         return $tempPath;
     }
- 
+
     // -------------------------------------------------------
     // ZIP entpacken
     // -------------------------------------------------------
- 
+
     private function extractZip(string $zipPath): void
     {
         mkdir($this->extractDir, 0755, true);
- 
+
         $zip = new ZipArchive();
         $result = $zip->open($zipPath);
- 
+
         if ($result !== true) {
             throw new \RuntimeException("ZIP konnte nicht geöffnet werden (Code: {$result})");
         }
- 
+
         $zip->extractTo($this->extractDir);
         $zip->close();
- 
+
         $this->line("   → Entpackt nach: {$this->extractDir}");
     }
- 
+
     // -------------------------------------------------------
     // Tabellen leeren (--fresh)
     // -------------------------------------------------------
- 
+
     private function truncateTables(): void
     {
         $this->warn('🗑  Leere alle GTFS-Tabellen...');
- 
-        DB::statement('SET FOREIGN_KEY_CHECKS=0');
+
+        $driver = DB::getDriverName();
+
+        // MySQL: Foreign Key Checks deaktivieren
+        if ($driver === 'mysql') {
+            DB::statement('SET FOREIGN_KEY_CHECKS=0');
+        }
+
         foreach (array_reverse(array_values(self::IMPORT_ORDER)) as $table) {
             DB::table($table)->truncate();
         }
-        DB::statement('SET FOREIGN_KEY_CHECKS=1');
+
+        // MySQL: wieder aktivieren
+        if ($driver === 'mysql') {
+            DB::statement('SET FOREIGN_KEY_CHECKS=1');
+        }
     }
- 
+
     // -------------------------------------------------------
     // Einzelne Datei importieren
     // -------------------------------------------------------
- 
+
     private function importFile(string $filePath, string $table, string $filename, int $chunkSize): void
     {
         $this->line("  📄 Importiere {$filename}.txt → {$table}");
- 
+
         $total    = 0;
         $inserted = 0;
- 
+
         // LazyCollection: liest CSV zeilenweise, ohne alles in den RAM zu laden
         $rows = $this->readCsv($filePath);
- 
+
         $bar = null;
- 
+
         $rows->chunk($chunkSize)->each(function ($chunk) use ($table, $filename, $chunkSize, &$total, &$inserted, &$bar) {
             $records = $chunk->map(fn($row) => $this->transformRow($row, $filename))->filter()->values()->toArray();
- 
+
             if (empty($records)) {
                 return;
             }
- 
+
             // Lazy-Init Progress Bar nach dem ersten Chunk (dann kennen wir die Columns)
             if ($bar === null) {
                 $bar = $this->output->createProgressBar();
                 $bar->setFormat(' %current% Datensätze [%bar%] %elapsed%');
                 $bar->start();
             }
- 
+
             $uniqueKeys = self::UNIQUE_KEYS[$table];
             $updateKeys = array_diff(array_keys($records[0]), $uniqueKeys);
- 
+
             // upsert statt insert: idempotent, kann mehrfach laufen
             DB::table($table)->upsert($records, $uniqueKeys, $updateKeys);
- 
+
             $total    += count($records);
             $inserted += count($records);
- 
+
             $bar?->advance(count($records));
         });
- 
+
         $bar?->finish();
         $this->newLine();
         $this->line("     → {$total} Datensätze verarbeitet");
     }
- 
+
     // -------------------------------------------------------
     // CSV-Zeilen als LazyCollection lesen
     // -------------------------------------------------------
- 
+
     private function readCsv(string $filePath): LazyCollection
     {
         return LazyCollection::make(function () use ($filePath) {
             $handle = fopen($filePath, 'r');
- 
+
             if ($handle === false) {
                 throw new \RuntimeException("Datei kann nicht gelesen werden: {$filePath}");
             }
- 
+
             // BOM entfernen falls vorhanden (manche Verbünde liefern UTF-8 BOM)
             $firstLine = fgets($handle);
             $firstLine = ltrim($firstLine, "\xEF\xBB\xBF");
             rewind($handle);
             fgets($handle); // Header überspringen (wird separat verarbeitet)
- 
+
             $headers = str_getcsv(trim($firstLine));
             $headers = array_map('trim', $headers);
- 
+
             while (($line = fgets($handle)) !== false) {
                 $values = str_getcsv(trim($line));
                 if (count($values) === count($headers)) {
                     yield array_combine($headers, $values);
                 }
             }
- 
+
             fclose($handle);
         });
     }
- 
+
     // -------------------------------------------------------
     // Zeile transformieren: GTFS-Spaltennamen → DB-Spalten
     // Leere Strings → null, Timestamps hinzufügen
     // -------------------------------------------------------
- 
+
     private function transformRow(array $row, string $filename): ?array
     {
         // Leere Strings in null umwandeln
         $row = array_map(fn($v) => $v === '' ? null : $v, $row);
- 
+
         $now = now()->toDateTimeString();
- 
+
         return match ($filename) {
             'agency' => [
                 'agency_id'       => $row['agency_id'] ?? 'default',
@@ -282,7 +290,7 @@ class GtfsImport extends Command
                 'created_at'      => $now,
                 'updated_at'      => $now,
             ],
- 
+
             'stops' => [
                 'stop_id'        => $row['stop_id'],
                 'stop_code'      => $row['stop_code'] ?? null,
@@ -298,7 +306,7 @@ class GtfsImport extends Command
                 'created_at'     => $now,
                 'updated_at'     => $now,
             ],
- 
+
             'routes' => [
                 'route_id'         => $row['route_id'],
                 'agency_id'        => $row['agency_id'] ?? null,
@@ -312,7 +320,7 @@ class GtfsImport extends Command
                 'created_at'       => $now,
                 'updated_at'       => $now,
             ],
- 
+
             'calendar' => [
                 'service_id' => $row['service_id'],
                 'monday'     => (int) ($row['monday'] ?? 0),
@@ -327,7 +335,7 @@ class GtfsImport extends Command
                 'created_at' => $now,
                 'updated_at' => $now,
             ],
- 
+
             'calendar_dates' => [
                 'service_id'     => $row['service_id'],
                 'date'           => $row['date'] ?? null,
@@ -335,7 +343,7 @@ class GtfsImport extends Command
                 'created_at'     => $now,
                 'updated_at'     => $now,
             ],
- 
+
             'shapes' => [
                 'shape_id'            => $row['shape_id'],
                 'shape_pt_lat'        => isset($row['shape_pt_lat']) ? (float) $row['shape_pt_lat'] : null,
@@ -345,7 +353,7 @@ class GtfsImport extends Command
                 'created_at'          => $now,
                 'updated_at'          => $now,
             ],
- 
+
             'trips' => [
                 'trip_id'               => $row['trip_id'],
                 'route_id'              => $row['route_id'],
@@ -360,7 +368,7 @@ class GtfsImport extends Command
                 'created_at'            => $now,
                 'updated_at'            => $now,
             ],
- 
+
             'stop_times' => [
                 'trip_id'             => $row['trip_id'],
                 'arrival_time'        => $row['arrival_time'] ?? null,
@@ -374,22 +382,22 @@ class GtfsImport extends Command
                 'timepoint'           => isset($row['timepoint']) ? (int) $row['timepoint'] : null,
                 // Kein created_at/updated_at — timestamps() ist in stop_times deaktiviert
             ],
- 
+
             default => null,
         };
     }
- 
+
     // -------------------------------------------------------
     // Temporäre Dateien aufräumen
     // -------------------------------------------------------
- 
+
     private function cleanup(): void
     {
         if (is_dir($this->extractDir)) {
             array_map('unlink', glob($this->extractDir . '/*'));
             rmdir($this->extractDir);
         }
- 
+
         $downloadedZip = storage_path('app/gtfs_download.zip');
         if (file_exists($downloadedZip)) {
             unlink($downloadedZip);
