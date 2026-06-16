@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Schedule;
 
 Schedule::command('gtfs:check-and-import')
     ->cron('0 13 * * 3,5')
+    ->timezone('Europe/Berlin')
     ->withoutOverlapping()
     ->onOneServer();
 
