@@ -5,7 +5,7 @@ use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Schedule;
 
 Schedule::command('gtfs:check-and-import')
-    ->twiceWeekly(3, 5, '13:00')
+    ->cron('0 13 * * 3,5')
     ->withoutOverlapping()
     ->onOneServer();
 
