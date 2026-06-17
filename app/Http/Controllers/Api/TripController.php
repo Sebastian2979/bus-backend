@@ -41,4 +41,21 @@ class TripController extends Controller
             ->get()
             ->groupBy('route_short_name');
     }
+
+    public function stopTimes($tripId)
+    {
+        return DB::table('stop_times')
+            ->where('stop_times.trip_id', $tripId)
+            ->join('stops', 'stop_times.stop_id', '=', 'stops.stop_id')
+            ->orderBy('stop_times.stop_sequence')
+            ->select(
+                'stop_times.stop_sequence',
+                'stop_times.arrival_time',
+                'stop_times.departure_time',
+                'stops.stop_name',
+                'stops.stop_lat',
+                'stops.stop_lon'
+            )
+            ->get();
+    }
 }
