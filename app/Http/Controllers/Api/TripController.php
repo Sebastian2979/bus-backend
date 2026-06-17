@@ -45,7 +45,7 @@ class TripController extends Controller
 
     public function stopTimes($tripId)
     {
-        LOG::info("TripId", $tripId);
+        Log::info("TripId", ['tripId' => $tripId]);
         return DB::table('stop_times')
             ->where('stop_times.trip_id', $tripId)
             ->join('stops', 'stop_times.stop_id', '=', 'stops.stop_id')
