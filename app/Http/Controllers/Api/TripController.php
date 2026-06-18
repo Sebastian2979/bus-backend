@@ -70,6 +70,7 @@ class TripController extends Controller
 
         $results = DB::table('stop_times')
             ->where('trip_id', $tripId)
+            ->where('stop_sequence', 0) // 👈 WICHTIG: nur erste Haltestelle
             ->select(
                 'trip_id',
                 'stop_sequence',
