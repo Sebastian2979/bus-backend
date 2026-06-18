@@ -14,3 +14,4 @@ Route::get('/shapes/{line}', [ShapeController::class, 'show']);
 Route::get('/trips/{line}', [TripController::class, 'byLine']);
 Route::get('/trips-grouped', [TripController::class, 'grouped']);
 Route::get('/trips/{tripId}/stop-times', [TripController::class, 'stopTimes']);
+Route::get('/trips/{tripId}/departures', [TripController::class, 'upcomingDepartures']);

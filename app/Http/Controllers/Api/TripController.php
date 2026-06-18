@@ -61,4 +61,31 @@ class TripController extends Controller
             )
             ->get();
     }
+
+    public function upcomingDepartures($tripId)
+    {
+        $nowSeconds = (int) now()->format('H') * 3600
+            + (int) now()->format('i') * 60
+            + (int) now()->format('s');
+
+        $results = DB::table('stop_times')
+            ->where('trip_id', $tripId)
+            ->select(
+                'trip_id',
+                'stop_sequence',
+                'departure_time'
+            )
+            ->get()
+            ->filter(function ($row) use ($nowSeconds) {
+                [$h, $m, $s] = array_pad(explode(':', $row->departure_time), 3, 0);
+                $seconds = ($h * 3600) + ($m * 60) + $s;
+
+                return $seconds >= $nowSeconds;
+            })
+            ->sortBy('departure_time')
+            ->take(5)
+            ->values();
+
+        return response()->json($results);
+    }
 }
