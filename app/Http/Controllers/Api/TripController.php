@@ -8,24 +8,53 @@ use Illuminate\Support\Facades\Log;
 
 class TripController extends Controller
 {
-    // Alle Trips einer Linie (für UI Expand)
     public function byLine($line)
     {
         $trips = DB::table('trips')
             ->join('routes', 'trips.route_id', '=', 'routes.route_id')
+
+            // START HALTESTELLE (stop_sequence = 0)
+            ->join('stop_times as st_start', function ($join) {
+                $join->on('trips.trip_id', '=', 'st_start.trip_id')
+                    ->where('st_start.stop_sequence', '=', 0);
+            })
+
+            // END HALTESTELLE (max stop_sequence pro trip)
+            ->join('stop_times as st_end', function ($join) {
+                $join->on('trips.trip_id', '=', 'st_end.trip_id')
+                    ->whereRaw('st_end.stop_sequence = (
+                     SELECT MAX(st2.stop_sequence)
+                     FROM stop_times st2
+                     WHERE st2.trip_id = trips.trip_id
+                 )');
+            })
+
+            // STOP DETAILS
+            ->join('stops as s_start', 'st_start.stop_id', '=', 's_start.stop_id')
+            ->join('stops as s_end', 'st_end.stop_id', '=', 's_end.stop_id')
+
             ->where('routes.route_short_name', $line)
+
             ->select(
                 'trips.trip_id',
                 'trips.shape_id',
                 'trips.direction_id',
-                'trips.trip_headsign'
-            )
-            ->get();
+                'trips.trip_headsign',
 
-        // dedupe by direction + headsign + shape
-        return $trips->unique(function ($item) {
-            return $item->direction_id . '-' . $item->trip_headsign . '-' . $item->shape_id;
-        })->values();
+                // 🚍 neu: echte Richtung
+                's_start.stop_name as start_name',
+                's_end.stop_name as end_name'
+            )
+
+            ->get()
+
+            // optional: Duplikate sauber reduzieren
+            ->unique(function ($item) {
+                return $item->start_name . '-' . $item->end_name;
+            })
+            ->values();
+
+        return response()->json($trips);
     }
 
     // Optional: gruppiert für UI
@@ -64,26 +93,30 @@ class TripController extends Controller
 
     public function upcomingDepartures($tripId)
     {
-        $nowSeconds = (int) now()->format('H') * 3600
-            + (int) now()->format('i') * 60
-            + (int) now()->format('s');
+        $now = now();
+
+        $nowSeconds = ($now->hour * 3600) + ($now->minute * 60) + $now->second;
 
         $results = DB::table('stop_times')
             ->where('trip_id', $tripId)
-            ->where('stop_sequence', 0) // 👈 WICHTIG: nur erste Haltestelle
-            ->select(
-                'trip_id',
-                'stop_sequence',
-                'departure_time'
-            )
+            ->where('stop_sequence', 0)
+            ->select('trip_id', 'departure_time')
             ->get()
-            ->filter(function ($row) use ($nowSeconds) {
+            ->map(function ($row) {
                 [$h, $m, $s] = array_pad(explode(':', $row->departure_time), 3, 0);
+
                 $seconds = ($h * 3600) + ($m * 60) + $s;
 
-                return $seconds >= $nowSeconds;
+                return [
+                    'trip_id' => $row->trip_id,
+                    'departure_time' => $row->departure_time,
+                    'seconds' => $seconds
+                ];
             })
-            ->sortBy('departure_time')
+            ->filter(function ($row) use ($nowSeconds) {
+                return $row['seconds'] >= $nowSeconds;
+            })
+            ->sortBy('seconds')
             ->take(5)
             ->values();
 
