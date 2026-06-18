@@ -97,29 +97,20 @@ class TripController extends Controller
 
         $nowSeconds = ($now->hour * 3600) + ($now->minute * 60) + $now->second;
 
-        $results = DB::table('stop_times')
+        return DB::table('stop_times')
             ->where('trip_id', $tripId)
             ->where('stop_sequence', 0)
             ->select('trip_id', 'departure_time')
+            ->orderBy('departure_time')
             ->get()
-            ->map(function ($row) {
-                [$h, $m, $s] = array_pad(explode(':', $row->departure_time), 3, 0);
-
-                $seconds = ($h * 3600) + ($m * 60) + $s;
-
-                return [
-                    'trip_id' => $row->trip_id,
-                    'departure_time' => $row->departure_time,
-                    'seconds' => $seconds
-                ];
-            })
             ->filter(function ($row) use ($nowSeconds) {
-                return $row['seconds'] >= $nowSeconds;
+
+                [$h, $m, $s] = array_pad(explode(':', $row->departure_time), 3, 0);
+                $sec = ($h * 3600) + ($m * 60) + $s;
+
+                return $sec >= $nowSeconds || $sec >= 86400;
             })
-            ->sortBy('seconds')
             ->take(5)
             ->values();
-
-        return response()->json($results);
     }
 }
