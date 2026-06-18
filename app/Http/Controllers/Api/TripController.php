@@ -15,6 +15,7 @@ class TripController extends Controller
             ->join('routes', 'trips.route_id', '=', 'routes.route_id')
             ->where('routes.route_short_name', $line)
             ->select(
+                'trips.trip_id',
                 'trips.shape_id',
                 'trips.direction_id',
                 'trips.trip_headsign'
