@@ -119,30 +119,49 @@ class TripController extends Controller
         $trips = DB::table('trips')
             ->join('routes', 'trips.route_id', '=', 'routes.route_id')
             ->where('routes.route_short_name', $line)
-            ->select('trips.trip_id')
+            ->select(
+                'trips.trip_id',
+                'trips.shape_id',
+                'trips.direction_id',
+                'trips.trip_headsign'
+            )
             ->get();
 
-        $directions = $trips->map(function ($trip) {
-            $start = DB::table('stop_times')
+        $result = $trips->map(function ($trip) use ($line) {
+            $firstStop = DB::table('stop_times')
                 ->join('stops', 'stop_times.stop_id', '=', 'stops.stop_id')
-                ->where('trip_id', $trip->trip_id)
+                ->where('stop_times.trip_id', $trip->trip_id)
                 ->orderBy('stop_sequence')
+                ->select('stops.stop_name')
                 ->first();
 
-            $end = DB::table('stop_times')
+            $lastStop = DB::table('stop_times')
                 ->join('stops', 'stop_times.stop_id', '=', 'stops.stop_id')
-                ->where('trip_id', $trip->trip_id)
+                ->where('stop_times.trip_id', $trip->trip_id)
                 ->orderByDesc('stop_sequence')
+                ->select('stops.stop_name')
                 ->first();
+
+            $startName = $firstStop?->stop_name ?? 'Unknown';
+            $endName = $lastStop?->stop_name ?? 'Unknown';
+
+            $directionKey = md5(
+                $line . '|' . $startName . '|' . $endName
+            );
 
             return [
-                'start' => $start?->stop_name,
-                'end' => $end?->stop_name,
+                'direction_key' => $directionKey,
+                'trip_id' => $trip->trip_id,
+                'shape_id' => $trip->shape_id,
+                'direction_id' => $trip->direction_id,
+                'trip_headsign' => $trip->trip_headsign,
+                'start_name' => $startName,
+                'end_name' => $endName,
             ];
         });
 
-        return $directions
-            ->unique(fn($d) => $d['start'] . '|' . $d['end'])
+        return $result
+            ->unique('direction_key')
             ->values();
     }
 
