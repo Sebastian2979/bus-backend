@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Carbon\Carbon;
 
 class TripController extends Controller
 {
@@ -232,6 +233,86 @@ class TripController extends Controller
             $departures
                 ->sortBy('seconds')
                 ->take(5)
+                ->values()
+        );
+    }
+
+    public function getValidTripsByLineAndStops($line, $start, $end)
+    {
+        $today = Carbon::today();
+        $todayDate = $today->format('Ymd');
+        $weekday = strtolower($today->format('l')); // monday, tuesday...
+
+        // 1. gültige service_ids bestimmen
+        $validServiceIds = DB::table('calendar')
+            ->where('start_date', '<=', $todayDate)
+            ->where('end_date', '>=', $todayDate)
+            ->where($weekday, 1)
+            ->pluck('service_id');
+
+        // zusätzlich calendar_dates (exceptions)
+        $addedServiceIds = DB::table('calendar_dates')
+            ->where('date', $todayDate)
+            ->where('exception_type', 1)
+            ->pluck('service_id');
+
+        $removedServiceIds = DB::table('calendar_dates')
+            ->where('date', $todayDate)
+            ->where('exception_type', 2)
+            ->pluck('service_id');
+
+        $serviceIds = $validServiceIds
+            ->merge($addedServiceIds)
+            ->diff($removedServiceIds)
+            ->unique();
+
+        // 2. Trips dieser Linie + gültige service_ids
+        $trips = DB::table('trips')
+            ->join('routes', 'trips.route_id', '=', 'routes.route_id')
+            ->where('routes.route_short_name', $line)
+            ->whereIn('trips.service_id', $serviceIds)
+            ->select('trips.trip_id')
+            ->get();
+
+        $result = collect();
+
+        foreach ($trips as $trip) {
+
+            // komplette Stop-Reihenfolge laden
+            $stops = DB::table('stop_times')
+                ->join('stops', 'stop_times.stop_id', '=', 'stops.stop_id')
+                ->where('stop_times.trip_id', $trip->trip_id)
+                ->orderBy('stop_times.stop_sequence')
+                ->get();
+
+            if ($stops->isEmpty()) continue;
+
+            // Start + End Position im Verlauf suchen
+            $startIndex = $stops->search(fn($s) => $s->stop_name === $start);
+            $endIndex   = $stops->search(fn($s) => $s->stop_name === $end);
+
+            // muss gültige Richtung sein
+            if ($startIndex === false || $endIndex === false) continue;
+            if ($startIndex >= $endIndex) continue;
+
+            $first = $stops[$startIndex];
+
+            // Zeit in Sekunden
+            [$h, $m, $s] = array_pad(explode(':', $first->departure_time), 3, 0);
+            $seconds = ($h * 3600) + ($m * 60) + $s;
+
+            $result->push([
+                'trip_id' => $trip->trip_id,
+                'departure_time' => $first->departure_time,
+                'seconds' => $seconds,
+                'start' => $start,
+                'end' => $end,
+            ]);
+        }
+
+        return response()->json(
+            $result
+                ->sortBy('seconds')
                 ->values()
         );
     }
