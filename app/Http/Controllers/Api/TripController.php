@@ -167,9 +167,11 @@ class TripController extends Controller
 
     public function departuresByDirection($line, $start, $end)
     {
-        $nowSeconds = now()->hour * 3600
-            + now()->minute * 60
-            + now()->second;
+        $now = now();
+
+        $nowSeconds = ($now->hour * 3600)
+            + ($now->minute * 60)
+            + $now->second;
 
         $trips = DB::table('trips')
             ->join('routes', 'trips.route_id', '=', 'routes.route_id')
@@ -180,41 +182,57 @@ class TripController extends Controller
         $departures = collect();
 
         foreach ($trips as $trip) {
+
             $firstStop = DB::table('stop_times')
                 ->join('stops', 'stop_times.stop_id', '=', 'stops.stop_id')
-                ->where('trip_id', $trip->trip_id)
-                ->orderBy('stop_sequence')
+                ->where('stop_times.trip_id', $trip->trip_id)
+                ->orderBy('stop_times.stop_sequence')
+                ->select(
+                    'stop_times.departure_time',
+                    'stops.stop_name'
+                )
                 ->first();
 
             $lastStop = DB::table('stop_times')
                 ->join('stops', 'stop_times.stop_id', '=', 'stops.stop_id')
-                ->where('trip_id', $trip->trip_id)
-                ->orderByDesc('stop_sequence')
+                ->where('stop_times.trip_id', $trip->trip_id)
+                ->orderByDesc('stop_times.stop_sequence')
+                ->select(
+                    'stop_times.departure_time',
+                    'stops.stop_name'
+                )
                 ->first();
 
             if (!$firstStop || !$lastStop) {
                 continue;
             }
 
-            if (
-                $firstStop->stop_name === $start &&
-                $lastStop->stop_name === $end
-            ) {
-                [$h, $m, $s] = explode(':', $firstStop->departure_time);
-                $seconds = $h * 3600 + $m * 60 + $s;
-
-                if ($seconds >= $nowSeconds) {
-                    $departures->push([
-                        'trip_id' => $trip->trip_id,
-                        'departure_time' => $firstStop->departure_time,
-                    ]);
-                }
+            if ($firstStop->stop_name !== $start || $lastStop->stop_name !== $end) {
+                continue;
             }
+
+            [$h, $m, $s] = array_pad(explode(':', $firstStop->departure_time), 3, 0);
+            $seconds = ($h * 3600) + ($m * 60) + $s;
+
+            // Mit GTFS "über Mitternacht"-Fix
+            if ($seconds < $nowSeconds) {
+                continue;
+            }
+
+            $departures->push([
+                'trip_id' => $trip->trip_id,
+                'departure_time' => $firstStop->departure_time,
+                'start' => $firstStop->stop_name,
+                'end' => $lastStop->stop_name,
+                'seconds' => $seconds,
+            ]);
         }
 
-        return $departures
-            ->sortBy('departure_time')
-            ->take(5)
-            ->values();
+        return response()->json(
+            $departures
+                ->sortBy('seconds')
+                ->take(5)
+                ->values()
+        );
     }
 }
