@@ -15,3 +15,5 @@ Route::get('/trips/{line}', [TripController::class, 'byLine']);
 Route::get('/trips-grouped', [TripController::class, 'grouped']);
 Route::get('/trips/{tripId}/stop-times', [TripController::class, 'stopTimes']);
 Route::get('/trips/{tripId}/departures', [TripController::class, 'upcomingDepartures']);
+Route::get('/lines/{line}/directions', [TripController::class, 'directions']);
+Route::get('/directions/{directionKey}/departures',[TripController::class, 'departuresByDirection']);

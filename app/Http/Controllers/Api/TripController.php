@@ -113,4 +113,89 @@ class TripController extends Controller
             ->take(5)
             ->values();
     }
+
+    public function directions($line)
+    {
+        $trips = DB::table('trips')
+            ->join('routes', 'trips.route_id', '=', 'routes.route_id')
+            ->where('routes.route_short_name', $line)
+            ->select('trips.trip_id')
+            ->get();
+
+        $directions = $trips->map(function ($trip) {
+            $start = DB::table('stop_times')
+                ->join('stops', 'stop_times.stop_id', '=', 'stops.stop_id')
+                ->where('trip_id', $trip->trip_id)
+                ->orderBy('stop_sequence')
+                ->first();
+
+            $end = DB::table('stop_times')
+                ->join('stops', 'stop_times.stop_id', '=', 'stops.stop_id')
+                ->where('trip_id', $trip->trip_id)
+                ->orderByDesc('stop_sequence')
+                ->first();
+
+            return [
+                'start' => $start?->stop_name,
+                'end' => $end?->stop_name,
+            ];
+        });
+
+        return $directions
+            ->unique(fn($d) => $d['start'] . '|' . $d['end'])
+            ->values();
+    }
+
+    public function departuresByDirection($line, $start, $end)
+    {
+        $nowSeconds = now()->hour * 3600
+            + now()->minute * 60
+            + now()->second;
+
+        $trips = DB::table('trips')
+            ->join('routes', 'trips.route_id', '=', 'routes.route_id')
+            ->where('routes.route_short_name', $line)
+            ->select('trips.trip_id')
+            ->get();
+
+        $departures = collect();
+
+        foreach ($trips as $trip) {
+            $firstStop = DB::table('stop_times')
+                ->join('stops', 'stop_times.stop_id', '=', 'stops.stop_id')
+                ->where('trip_id', $trip->trip_id)
+                ->orderBy('stop_sequence')
+                ->first();
+
+            $lastStop = DB::table('stop_times')
+                ->join('stops', 'stop_times.stop_id', '=', 'stops.stop_id')
+                ->where('trip_id', $trip->trip_id)
+                ->orderByDesc('stop_sequence')
+                ->first();
+
+            if (!$firstStop || !$lastStop) {
+                continue;
+            }
+
+            if (
+                $firstStop->stop_name === $start &&
+                $lastStop->stop_name === $end
+            ) {
+                [$h, $m, $s] = explode(':', $firstStop->departure_time);
+                $seconds = $h * 3600 + $m * 60 + $s;
+
+                if ($seconds >= $nowSeconds) {
+                    $departures->push([
+                        'trip_id' => $trip->trip_id,
+                        'departure_time' => $firstStop->departure_time,
+                    ]);
+                }
+            }
+        }
+
+        return $departures
+            ->sortBy('departure_time')
+            ->take(5)
+            ->values();
+    }
 }
