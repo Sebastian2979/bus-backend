@@ -246,6 +246,7 @@ class TripController extends Controller
 
     public function getValidTripsByLineAndStops($line, $start, $end)
     {
+        Log::info("getValidTripsByLineAndStops", ["line" => $line, "start" => $start, "end" => $end]);
         $today = Carbon::today();
         $todayDate = $today->format('Ymd');
         $weekday = strtolower($today->format('l'));
