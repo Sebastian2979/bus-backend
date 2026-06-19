@@ -9,6 +9,13 @@ use Carbon\Carbon;
 
 class TripController extends Controller
 {
+    private function gtfsTimeToSeconds($time)
+    {
+        [$h, $m, $s] = array_pad(explode(':', $time), 3, 0);
+
+        return ((int)$h * 3600) + ((int)$m * 60) + (int)$s;
+    }
+
     public function byLine($line)
     {
         $trips = DB::table('trips')
@@ -241,16 +248,15 @@ class TripController extends Controller
     {
         $today = Carbon::today();
         $todayDate = $today->format('Ymd');
-        $weekday = strtolower($today->format('l')); // monday, tuesday...
+        $weekday = strtolower($today->format('l'));
 
-        // 1. gültige service_ids bestimmen
-        $validServiceIds = DB::table('calendar')
+        // 1. service_ids
+        $validServiceIds = DB::table('calendars')
             ->where('start_date', '<=', $todayDate)
             ->where('end_date', '>=', $todayDate)
             ->where($weekday, 1)
             ->pluck('service_id');
 
-        // zusätzlich calendar_dates (exceptions)
         $addedServiceIds = DB::table('calendar_dates')
             ->where('date', $todayDate)
             ->where('exception_type', 1)
@@ -264,9 +270,10 @@ class TripController extends Controller
         $serviceIds = $validServiceIds
             ->merge($addedServiceIds)
             ->diff($removedServiceIds)
-            ->unique();
+            ->unique()
+            ->values();
 
-        // 2. Trips dieser Linie + gültige service_ids
+        // 2. Trips
         $trips = DB::table('trips')
             ->join('routes', 'trips.route_id', '=', 'routes.route_id')
             ->where('routes.route_short_name', $line)
@@ -278,32 +285,28 @@ class TripController extends Controller
 
         foreach ($trips as $trip) {
 
-            // komplette Stop-Reihenfolge laden
             $stops = DB::table('stop_times')
-                ->join('stops', 'stop_times.stop_id', '=', 'stops.stop_id')
-                ->where('stop_times.trip_id', $trip->trip_id)
-                ->orderBy('stop_times.stop_sequence')
+                ->where('trip_id', $trip->trip_id)
+                ->orderBy('stop_sequence')
                 ->get();
 
             if ($stops->isEmpty()) continue;
 
-            // Start + End Position im Verlauf suchen
-            $startIndex = $stops->search(fn($s) => $s->stop_name === $start);
-            $endIndex   = $stops->search(fn($s) => $s->stop_name === $end);
+            // STOP IDs statt Namen
+            $startIndex = $stops->search(fn($s) => $s->stop_id === $start);
+            $endIndex   = $stops->search(fn($s) => $s->stop_id === $end);
 
-            // muss gültige Richtung sein
             if ($startIndex === false || $endIndex === false) continue;
             if ($startIndex >= $endIndex) continue;
 
-            $first = $stops[$startIndex];
+            $startStop = $stops[$startIndex];
 
-            // Zeit in Sekunden
-            [$h, $m, $s] = array_pad(explode(':', $first->departure_time), 3, 0);
-            $seconds = ($h * 3600) + ($m * 60) + $s;
+            // GTFS Zeit korrekt parsen (inkl. >24h Fix)
+            $seconds = $this->gtfsTimeToSeconds($startStop->departure_time);
 
             $result->push([
                 'trip_id' => $trip->trip_id,
-                'departure_time' => $first->departure_time,
+                'departure_time' => $startStop->departure_time,
                 'seconds' => $seconds,
                 'start' => $start,
                 'end' => $end,
@@ -311,9 +314,7 @@ class TripController extends Controller
         }
 
         return response()->json(
-            $result
-                ->sortBy('seconds')
-                ->values()
+            $result->sortBy('seconds')->values()
         );
     }
 }
