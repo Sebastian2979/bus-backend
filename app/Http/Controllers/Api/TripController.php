@@ -9,13 +9,6 @@ use Carbon\Carbon;
 
 class TripController extends Controller
 {
-    private function gtfsTimeToSeconds($time)
-    {
-        [$h, $m, $s] = array_pad(explode(':', $time), 3, 0);
-
-        return ((int)$h * 3600) + ((int)$m * 60) + (int)$s;
-    }
-
     public function byLine($line)
     {
         $trips = DB::table('trips')
@@ -65,22 +58,6 @@ class TripController extends Controller
         return response()->json($trips);
     }
 
-    // Optional: gruppiert für UI
-    public function grouped()
-    {
-        return DB::table('trips')
-            ->join('routes', 'trips.route_id', '=', 'routes.route_id')
-            ->select(
-                'routes.route_short_name',
-                'trips.trip_id',
-                'trips.shape_id',
-                'trips.direction_id',
-                'trips.trip_headsign'
-            )
-            ->get()
-            ->groupBy('route_short_name');
-    }
-
     public function stopTimes($tripId)
     {
         Log::info("TripId", ['tripId' => $tripId]);
@@ -99,159 +76,63 @@ class TripController extends Controller
             ->get();
     }
 
-    public function upcomingDepartures($tripId)
+    public function getUpcomingTripDepartures($tripId)
     {
-        $now = now();
-
-        $nowSeconds = ($now->hour * 3600) + ($now->minute * 60) + $now->second;
-
-        return DB::table('stop_times')
-            ->where('trip_id', $tripId)
-            ->where('stop_sequence', 0)
-            ->select('trip_id', 'departure_time')
-            ->orderBy('departure_time')
-            ->get()
-            ->filter(function ($row) use ($nowSeconds) {
-
-                [$h, $m, $s] = array_pad(explode(':', $row->departure_time), 3, 0);
-                $sec = ($h * 3600) + ($m * 60) + $s;
-
-                return $sec >= $nowSeconds || $sec >= 86400;
-            })
-            ->take(5)
-            ->values();
-    }
-
-    public function directions($line)
-    {
-        $trips = DB::table('trips')
-            ->join('routes', 'trips.route_id', '=', 'routes.route_id')
-            ->where('routes.route_short_name', $line)
-            ->select(
-                'trips.trip_id',
-                'trips.shape_id',
-                'trips.direction_id',
-                'trips.trip_headsign'
-            )
-            ->get();
-
-        $result = $trips->map(function ($trip) use ($line) {
-            $firstStop = DB::table('stop_times')
-                ->join('stops', 'stop_times.stop_id', '=', 'stops.stop_id')
-                ->where('stop_times.trip_id', $trip->trip_id)
-                ->orderBy('stop_sequence')
-                ->select('stops.stop_name')
-                ->first();
-
-            $lastStop = DB::table('stop_times')
-                ->join('stops', 'stop_times.stop_id', '=', 'stops.stop_id')
-                ->where('stop_times.trip_id', $trip->trip_id)
-                ->orderByDesc('stop_sequence')
-                ->select('stops.stop_name')
-                ->first();
-
-            $startName = $firstStop?->stop_name ?? 'Unknown';
-            $endName = $lastStop?->stop_name ?? 'Unknown';
-
-            $directionKey = md5(
-                $line . '|' . $startName . '|' . $endName
-            );
-
-            return [
-                'direction_key' => $directionKey,
-                'trip_id' => $trip->trip_id,
-                'shape_id' => $trip->shape_id,
-                'direction_id' => $trip->direction_id,
-                'trip_headsign' => $trip->trip_headsign,
-                'start_name' => $startName,
-                'end_name' => $endName,
-            ];
-        });
-
-        return $result
-            ->unique('direction_key')
-            ->values();
-    }
-
-    public function departuresByDirection($line, $start, $end)
-    {
-        $now = now();
-
-        $nowSeconds = ($now->hour * 3600)
-            + ($now->minute * 60)
-            + $now->second;
-
-        $trips = DB::table('trips')
-            ->join('routes', 'trips.route_id', '=', 'routes.route_id')
-            ->where('routes.route_short_name', $line)
-            ->select('trips.trip_id')
-            ->get();
-
-        $departures = collect();
-
-        foreach ($trips as $trip) {
-
-            $firstStop = DB::table('stop_times')
-                ->join('stops', 'stop_times.stop_id', '=', 'stops.stop_id')
-                ->where('stop_times.trip_id', $trip->trip_id)
-                ->orderBy('stop_times.stop_sequence')
-                ->select(
-                    'stop_times.departure_time',
-                    'stops.stop_name'
-                )
-                ->first();
-
-            $lastStop = DB::table('stop_times')
-                ->join('stops', 'stop_times.stop_id', '=', 'stops.stop_id')
-                ->where('stop_times.trip_id', $trip->trip_id)
-                ->orderByDesc('stop_times.stop_sequence')
-                ->select(
-                    'stop_times.departure_time',
-                    'stops.stop_name'
-                )
-                ->first();
-
-            if (!$firstStop || !$lastStop) {
-                continue;
-            }
-
-            if ($firstStop->stop_name !== $start || $lastStop->stop_name !== $end) {
-                continue;
-            }
-
-            [$h, $m, $s] = array_pad(explode(':', $firstStop->departure_time), 3, 0);
-            $seconds = ($h * 3600) + ($m * 60) + $s;
-
-            // Mit GTFS "über Mitternacht"-Fix
-            if ($seconds < $nowSeconds) {
-                continue;
-            }
-
-            $departures->push([
-                'trip_id' => $trip->trip_id,
-                'departure_time' => $firstStop->departure_time,
-                'start' => $firstStop->stop_name,
-                'end' => $lastStop->stop_name,
-                'seconds' => $seconds,
-            ]);
-        }
-
-        return response()->json(
-            $departures
-                ->sortBy('seconds')
-                ->take(5)
-                ->values()
-        );
-    }
-
-    public function getValidTripsByLineAndStops($line, $start, $end)
-    {
-        Log::info("getValidTripsByLineAndStops", ["line" => $line, "start" => $start, "end" => $end]);
-        $today = Carbon::today();
+        $now = now('Europe/Berlin')->format('H:i:s');
+        $today = Carbon::today('Europe/Berlin');
         $todayDate = $today->format('Ymd');
         $weekday = strtolower($today->format('l'));
 
-        // 1. service_ids
+        Log::info('Zeitinfo', [
+            'now' => $now,
+            'todayDate' => $todayDate,
+            'weekday' => $weekday,
+        ]);
+
+        /*
+    |--------------------------------------------------------------------------
+    | 1. Ausgewählten Trip laden
+    |--------------------------------------------------------------------------
+    */
+        $selectedTrip = DB::table('trips')
+            ->where('trip_id', $tripId)
+            ->first();
+
+        if (!$selectedTrip) {
+            return response()->json([
+                'error' => 'Trip nicht gefunden'
+            ], 404);
+        }
+
+        /*
+    |--------------------------------------------------------------------------
+    | 2. Start- und Endhaltestelle dieses Trips bestimmen
+    |--------------------------------------------------------------------------
+    */
+        $selectedStops = DB::table('stop_times')
+            ->where('trip_id', $tripId)
+            ->orderBy('stop_sequence')
+            ->get();
+
+        if ($selectedStops->isEmpty()) {
+            return response()->json([
+                'error' => 'Keine stop_times für Trip'
+            ], 404);
+        }
+
+        $startStopId = $selectedStops->first()->stop_id;
+        $endStopId = $selectedStops->last()->stop_id;
+
+        Log::info('Selected Trip Stops', [
+            'startStopId' => $startStopId,
+            'endStopId' => $endStopId,
+        ]);
+
+        /*
+    |--------------------------------------------------------------------------
+    | 3. Gültige service_ids für heute bestimmen
+    |--------------------------------------------------------------------------
+    */
         $validServiceIds = DB::table('calendars')
             ->where('start_date', '<=', $todayDate)
             ->where('end_date', '>=', $todayDate)
@@ -274,48 +155,84 @@ class TripController extends Controller
             ->unique()
             ->values();
 
-        // 2. Trips
-        $trips = DB::table('trips')
-            ->join('routes', 'trips.route_id', '=', 'routes.route_id')
-            ->where('routes.route_short_name', $line)
-            ->whereIn('trips.service_id', $serviceIds)
-            ->select('trips.trip_id')
-            ->get();
+        /*
+    |--------------------------------------------------------------------------
+    | 4. Alle heutigen Trips derselben Route + Richtung
+    |--------------------------------------------------------------------------
+    */
+        $candidateTrips = DB::table('trips')
+            ->where('route_id', $selectedTrip->route_id)
+            ->where('direction_id', $selectedTrip->direction_id)
+            ->whereIn('service_id', $serviceIds)
+            ->pluck('trip_id');
 
-        $result = collect();
+        Log::info('Candidate Trips Count', [
+            'count' => $candidateTrips->count()
+        ]);
 
-        foreach ($trips as $trip) {
+        /*
+    |--------------------------------------------------------------------------
+    | 5. Nur Trips mit identischem Start und Ende behalten
+    |--------------------------------------------------------------------------
+    */
+        $matchingTrips = collect();
 
-            $stops = DB::table('stop_times')
-                ->where('trip_id', $trip->trip_id)
+        foreach ($candidateTrips as $candidateTripId) {
+
+            $tripStops = DB::table('stop_times')
+                ->where('trip_id', $candidateTripId)
                 ->orderBy('stop_sequence')
                 ->get();
 
-            if ($stops->isEmpty()) continue;
+            if ($tripStops->isEmpty()) {
+                continue;
+            }
 
-            // STOP IDs statt Namen
-            $startIndex = $stops->search(fn($s) => $s->stop_id === $start);
-            $endIndex   = $stops->search(fn($s) => $s->stop_id === $end);
+            $tripStart = $tripStops->first()->stop_id;
+            $tripEnd = $tripStops->last()->stop_id;
 
-            if ($startIndex === false || $endIndex === false) continue;
-            if ($startIndex >= $endIndex) continue;
-
-            $startStop = $stops[$startIndex];
-
-            // GTFS Zeit korrekt parsen (inkl. >24h Fix)
-            $seconds = $this->gtfsTimeToSeconds($startStop->departure_time);
-
-            $result->push([
-                'trip_id' => $trip->trip_id,
-                'departure_time' => $startStop->departure_time,
-                'seconds' => $seconds,
-                'start' => $start,
-                'end' => $end,
-            ]);
+            if (
+                $tripStart === $startStopId &&
+                $tripEnd === $endStopId
+            ) {
+                $matchingTrips->push($candidateTripId);
+            }
         }
 
-        return response()->json(
-            $result->sortBy('seconds')->values()
-        );
+        Log::info('Matching Trips', [
+            'count' => $matchingTrips->count()
+        ]);
+
+        /*
+    |--------------------------------------------------------------------------
+    | 6. Abfahrten an der Starthaltestelle holen
+    |--------------------------------------------------------------------------
+    */
+        $departures = DB::table('stop_times')
+            ->whereIn('trip_id', $matchingTrips)
+            ->where('stop_id', $startStopId)
+            ->select('trip_id', 'departure_time')
+            ->orderBy('departure_time')
+            ->get();
+
+        /*
+    |--------------------------------------------------------------------------
+    | 7. Nur zukünftige Abfahrten
+    |--------------------------------------------------------------------------
+    */
+        $nextDepartures = $departures
+            ->filter(function ($departure) use ($now) {
+                return $departure->departure_time >= $now;
+            })
+            ->take(5)
+            ->values();
+
+        return response()->json([
+            'selected_trip_id' => $tripId,
+            'start_stop_id' => $startStopId,
+            'end_stop_id' => $endStopId,
+            'current_time' => $now,
+            'next_departures' => $nextDepartures
+        ]);
     }
 }
